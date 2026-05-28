@@ -1,3 +1,5 @@
+import eventlet
+eventlet.monkey_patch()
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import bcrypt, os, time, threading, uuid
@@ -176,16 +178,19 @@ def ws_disconnect():
 
 @socketio.on("join_room")
 def ws_join(data):
-    room = data.get("room", "public")
 
-    leave_room(session.get("room", "public"))
+    old_room = session.get("room", "public")
 
-    session["room"] = room
+    new_room = data.get("room", "public")
 
-    join_room(room)
+    leave_room(old_room)
+
+    session["room"] = new_room
+
+    join_room(new_room)
 
     emit("system", {
-        "message": f"Joined room {room}"
+        "message": f"Joined room {new_room}"
     })
 
 
@@ -213,16 +218,19 @@ def ws_send(data):
 
     path = msg_path(room)
 
-    write_msg(path, user, message)
-
     ts = time.strftime("[%H:%M:%S]", time.localtime())
 
+    mid = uuid.uuid4().hex[:8]
+
+    with open(path, "a") as f:
+        f.write(f"{ts}|{user}: {message}|{mid}\n")
+
     msg_data = {
+        "id": mid,
         "user": user,
         "message": message,
         "time": ts
     }
-
     # Broadcast instantly to everyone in room
     emit("new_message", msg_data, room=room)
 
