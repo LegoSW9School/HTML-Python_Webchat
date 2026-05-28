@@ -230,7 +230,7 @@ def ws_send(data):
 def index(): return send_from_directory("templates","chat.html")
 
 @app.route("/room/join", methods=["POST"])
-def join_room():
+def join_room_route():
     if is_banned(): return "banned", 403
 
     data = request.json
