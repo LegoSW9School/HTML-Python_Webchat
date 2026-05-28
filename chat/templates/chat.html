@@ -112,7 +112,7 @@ button:hover {background:#3a3f4a; cursor:pointer;}
 
 <script>
 let user="", room="public", lastLen=0;
-const socket = io();
+let socket = null;
 
 socket.on("connect", () => {
     console.log("WebSocket connected");
@@ -129,7 +129,7 @@ socket.on("system", (data) => {
     showStatus(data.message);
 });
 let isAdmin=false;
-
+let seenMessages = new Set();
 const usernameInput=document.getElementById("username");
 const passwordInput=document.getElementById("password");
 const loginDiv=document.getElementById("login");
@@ -162,8 +162,35 @@ function login(){
 }
 
 function logout(){ fetch("/logout").then(()=>location.reload()); }
-function showChat(){ loginDiv.style.display="none"; chatDiv.style.display="block"; logoutBtn.style.display="inline"; }
+function showChat(){
 
+    loginDiv.style.display="none";
+    chatDiv.style.display="block";
+    logoutBtn.style.display="inline";
+
+    // CONNECT AFTER LOGIN
+    socket = io();
+
+    socket.on("connect", () => {
+        console.log("WebSocket connected");
+
+        socket.emit("join_room", {
+            room: room
+        });
+    });
+
+    socket.on("disconnect", () => {
+        console.log("WebSocket disconnected");
+    });
+
+    socket.on("new_message", (data) => {
+        addLiveMessage(data);
+    });
+
+    socket.on("system", (data) => {
+        showStatus(data.message);
+    });
+}
 // ---------------- Register ----------------
 function register(){
     const u=usernameInput.value.trim();
@@ -192,6 +219,14 @@ function renderMessages(d){
     }).join("");
 }
 function addLiveMessage(data){
+
+    const key = `${data.time}-${data.user}-${data.message}`;
+
+    if(seenMessages.has(key)){
+        return;
+    }
+
+    seenMessages.add(key);
 
     const isAtBottom =
         chatBox.scrollTop + chatBox.clientHeight >= chatBox.scrollHeight - 5;
