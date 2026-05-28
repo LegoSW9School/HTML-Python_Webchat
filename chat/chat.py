@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory, session
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import bcrypt, os, time, threading, uuid
 import uuid
 
@@ -9,6 +10,8 @@ banned_cookies = set()
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
+
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 BASE = os.path.dirname(__file__)
 MSG_DIR = os.path.join(BASE,"messages")
@@ -143,6 +146,86 @@ threading.Thread(target=cleanup,daemon=True).start()
 threading.Thread(target=prune,daemon=True).start()
 
 # ---------------- Routes ----------------
+# ---------------- WebSocket Events ----------------
+
+@socketio.on("connect")
+def ws_connect():
+    user = session.get("user")
+
+    if not user:
+        return False
+
+    room = session.get("room", "public")
+
+    join_room(room)
+
+    emit("system", {
+        "message": f"{user} connected"
+    }, room=room)
+
+    print(f"{user} connected to {room}")
+
+
+@socketio.on("disconnect")
+def ws_disconnect():
+    user = session.get("user")
+
+    if user:
+        print(f"{user} disconnected")
+
+
+@socketio.on("join_room")
+def ws_join(data):
+    room = data.get("room", "public")
+
+    leave_room(session.get("room", "public"))
+
+    session["room"] = room
+
+    join_room(room)
+
+    emit("system", {
+        "message": f"Joined room {room}"
+    })
+
+
+@socketio.on("send_message")
+def ws_send(data):
+    user = session.get("user")
+
+    if not user:
+        return
+
+    if is_banned():
+        return
+
+    if user in muted_users:
+        return
+
+    if ratelimit(user):
+        return
+
+    room = data.get("room", "public")
+    message = data.get("message", "").strip()
+
+    if not message:
+        return
+
+    path = msg_path(room)
+
+    write_msg(path, user, message)
+
+    ts = time.strftime("[%H:%M:%S]", time.localtime())
+
+    msg_data = {
+        "user": user,
+        "message": message,
+        "time": ts
+    }
+
+    # Broadcast instantly to everyone in room
+    emit("new_message", msg_data, room=room)
+
 @app.route("/")
 def index(): return send_from_directory("templates","chat.html")
 
@@ -229,6 +312,17 @@ def send():
     p = msg_path(room)
     os.makedirs(MSG_DIR, exist_ok=True)
     write_msg(p, u, d["message"])
+    
+    socketio.emit(
+        "new_message",
+        {
+            "user": u,
+            "message": d["message"],
+            "time": time.strftime("[%H:%M:%S]", time.localtime())
+        },
+        room=room
+    )
+
     return jsonify(status="ok")
 
 
@@ -357,4 +451,4 @@ def command():
 
 # ---------------- Start ----------------
 if __name__=="__main__":
-    app.run(host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=5000)
