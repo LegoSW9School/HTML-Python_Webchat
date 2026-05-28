@@ -67,6 +67,7 @@ button:hover {background:#3a3f4a; cursor:pointer;}
 }
 
 </style>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
 <div id="statusPopup" role="status" aria-live="polite"></div>
@@ -111,6 +112,22 @@ button:hover {background:#3a3f4a; cursor:pointer;}
 
 <script>
 let user="", room="public", lastLen=0;
+const socket = io();
+
+socket.on("connect", () => {
+    console.log("WebSocket connected");
+});
+
+socket.on("disconnect", () => {
+    console.log("WebSocket disconnected");
+});
+socket.on("new_message", (data) => {
+    addLiveMessage(data);
+});
+
+socket.on("system", (data) => {
+    showStatus(data.message);
+});
 let isAdmin=false;
 
 const usernameInput=document.getElementById("username");
@@ -174,7 +191,26 @@ function renderMessages(d){
         return html;
     }).join("");
 }
+function addLiveMessage(data){
 
+    const isAtBottom =
+        chatBox.scrollTop + chatBox.clientHeight >= chatBox.scrollHeight - 5;
+
+    const div = document.createElement("div");
+    div.className = "message";
+
+    div.innerHTML = `
+        <span class="timestamp">${data.time}</span>
+        <span class="username">${data.user}:</span>
+        ${data.message}
+    `;
+
+    chatBox.appendChild(div);
+
+    if(isAtBottom){
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+}
 function load(){
     fetch(`/messages?room=${room}`)
         .then(r=>r.json())
@@ -196,37 +232,44 @@ function load(){
         });
 }
 
-function send(){ 
-    const msg = messageInput.value.trim(); 
-    if(!msg) return; 
+function send(){
 
-    fetch(msg.startsWith("/") ? "/command" : "/send", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({message: msg, cmd: msg, room: room})
-    })
-    .then(r => {
-        if(msg.startsWith("/")){
-            if(r.status === 403){ showStatus("Admin only."); return; }
-            if(r.status === 404){ showStatus("User not found."); return; }
-            if(r.status === 400){ showStatus("Command missing target or invalid."); return; }
-            return r.json().then(res => showStatus(res));
-        }
-        return r.json().then(res => {
-            showStatus(res);
-            if(res.status === "muted") {
-                errorDiv.textContent = "You are muted. You cannot send messages.";
-            } else if(res.status === "banned" || res.status === "ip_banned") {
-                errorDiv.textContent = "You are banned. Access denied.";
-            } else if(res.status === "rate") {
-                errorDiv.textContent = "Rate limit exceeded. Please wait a few seconds.";
-            } else if(res.status === "ok") {
-                errorDiv.textContent = "";
+    const msg = messageInput.value.trim();
+
+    if(!msg) return;
+
+    // Commands still use HTTP
+    if(msg.startsWith("/")){
+
+        fetch("/command",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({
+                cmd:msg
+            })
+        })
+        .then(r=>{
+            if(r.status===403){
+                showStatus("Admin only.");
+                return;
             }
-        });
-    });
 
-    messageInput.value = ""; 
+            return r.json().then(res=>{
+                showStatus(res);
+            });
+        });
+
+    } else {
+
+        // NORMAL CHAT USES WEBSOCKET
+        socket.emit("send_message", {
+            room: room,
+            message: msg
+        });
+
+    }
+
+    messageInput.value="";
 }
 
 function deleteMsg(id){
@@ -242,7 +285,18 @@ function deleteMsg(id){
     });
 }
 function loadUsers(){ fetch("/users").then(r=>r.json()).then(d=>userList.innerHTML=d.map(u=>`<div class="user">${u}</div>`).join("")); }
-function switchRoom(r){ room=r; lastLen=0; load(); }
+function switchRoom(r){
+
+    room = r;
+
+    chatBox.innerHTML = "";
+
+    socket.emit("join_room", {
+        room: room
+    });
+
+    load();
+}
 function newRoom(){ fetch("/room/new").then(r=>r.text()).then(switchRoom); }
 
 // ---------------- Event Listeners ----------------
@@ -277,9 +331,7 @@ function joinRoom() {
     })
     .then(r => {
         if(r.ok) {
-            room = code;
-            lastLen = 0;
-            load();
+            switchRoom(code);
         } else {
             alert("Room does not exist or you are banned.");
         }
@@ -294,7 +346,20 @@ function showStatus(msg){
 }
 
 // ---------------- Start fetching ----------------
-function start(){ load(); setInterval(load,1000); setInterval(loadUsers,3000); setInterval(()=>fetch("/ping",{method:"POST"}),5000); }
+function start(){
+
+    load();
+
+    // only poll users now
+    setInterval(loadUsers, 3000);
+
+    // keepalive
+    setInterval(()=>{
+        fetch("/ping",{
+            method:"POST"
+        });
+    },5000);
+}
 </script>
 </body>
 </html>
